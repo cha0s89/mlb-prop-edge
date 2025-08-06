@@ -1,14 +1,15 @@
 # prop_edge.py
 
 from pybaseball import playerid_lookup
+from typing import Optional
 
-def get_player_id(player_name: str, roster_mapping: dict) -> int | None:
+def get_player_id(player_name: str, roster_mapping: dict) -> Optional[int]:
     """Return MLBAM player ID for a given name using roster or lookup fallback."""
     key = player_name.strip().lower()
     if key in roster_mapping:
         return roster_mapping[key]
 
-    # Try lookup fallback
+    # Try lookup fallback using pybaseball
     try:
         name_parts = key.split()
         if len(name_parts) == 2:
@@ -26,7 +27,7 @@ def build_roster_mapping() -> dict:
     from pybaseball import team_roster
     mapping = {}
 
-    # Static MLB team IDs
+    # Hardcoded MLB team IDs (30 total)
     team_ids = [
         108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
         118, 119, 120, 121, 133, 134, 135, 136, 137, 138,
