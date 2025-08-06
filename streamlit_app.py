@@ -1,10 +1,32 @@
-import pandas as pd
+# streamlit_app.py
+
 import streamlit as st
-from prop_edge import get_player_id
-from game_utils import get_game_info_for_player
+import pandas as pd
+from prop_edge import get_player_id, build_roster_mapping
+from game_utils import (
+    build_player_team_mapping,
+    get_today_schedule,
+    get_game_info_for_player
+)
 from evaluate_prop_v2 import evaluate_prop_v2
 
-# Inside your Streamlit UI block:
+
+# --- Load Data Once ---
+@st.cache_data
+def load_data():
+    roster_mapping = build_roster_mapping()
+    team_mapping = build_player_team_mapping()
+    schedule_today = get_today_schedule()
+    return roster_mapping, team_mapping, schedule_today
+
+
+roster_mapping, team_mapping, schedule_today = load_data()
+
+st.set_page_config(page_title="MLB Prop Evaluator", layout="wide")
+st.title("⚾ MLB Prop Bet Evaluator")
+st.markdown("Upload a RotoWire CSV to get model-based predictions for today's props.")
+
+# --- CSV Upload + Evaluation ---
 csv_file = st.file_uploader("📤 Upload RotoWire CSV", type=["csv"])
 
 if csv_file:
@@ -69,3 +91,6 @@ if csv_file:
     st.dataframe(result_df)
 
     st.download_button("📥 Download Full Evaluation", result_df.to_csv(index=False), file_name="evaluated_props.csv")
+
+else:
+    st.info("Upload a CSV to begin analysis.")
