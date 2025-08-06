@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
 import itertools
+import requests
+
 from evaluate_prop_v2 import evaluate_prop_v2
-from prop_edge import build_roster_mapping, get_player_id
-from streamlit_app import build_player_team_mapping, get_today_schedule, get_game_info_for_player
+from prop_edge import get_player_id, build_roster_mapping
+from game_utils import build_player_team_mapping, get_today_schedule, get_game_info_for_player
 
 st.set_page_config(page_title="MLB Prop Evaluator", page_icon="⚾", layout="wide")
-st.title("📊 MLB Prop Evaluator (v2)")
-st.write("Supports single prop evaluation, RotoWire CSV slates, live Pick6 props, and combo optimization.")
+st.title("📊 MLB Prop Evaluator")
 
 @st.cache_data(ttl=43200)
 def load_data():
@@ -15,9 +16,9 @@ def load_data():
 
 roster_mapping, team_mapping, schedule_today = load_data()
 
-tab1, tab2, tab3 = st.tabs(["🔍 Single Prop", "📂 RotoWire CSV Upload", "🎯 Live Pick6 Slate"])
+tab1, tab2, tab3 = st.tabs(["🔍 Single Prop", "📂 RotoWire CSV Upload", "🎯 Live Pick6"])
 
-# ----------- SINGLE PROP TAB -----------
+# ────────────────────────────── TAB 1 — Single Prop Evaluation ──────────────────────────────
 with tab1:
     player_name = st.text_input("Player Name")
     prop_type = st.selectbox("Prop Type", [
@@ -39,32 +40,27 @@ with tab1:
             ballpark = game_info.get("ballpark")
 
             prob, details, confidence = evaluate_prop_v2(
-                player_name, prop_type, line, side,
+                player_name=player_name,
+                prop_type=prop_type,
+                line=line,
+                side=side,
                 pitcher_name=pitcher_name or None,
                 is_home=is_home,
                 ballpark=ballpark,
                 umpire=umpire_name or None,
-                player_id=player_id
+                player_id=player_id,
             )
 
-            st.metric(f"📊 Probability of {side.capitalize()} {line}", f"{prob * 100:.1f}%")
-            st.write(f"🔐 Confidence: {confidence}")
-            st.write(f"🏟️ Ballpark: {ballpark} — 🏠 Home: {is_home}")
+            st.metric(f"📊 Probability of {side.title()} {line}", f"{prob * 100:.1f}%")
+            st.write(f"Confidence Score: {confidence}")
+            st.write(f"Ballpark: `{ballpark}` | Home Game: `{is_home}`")
 
-            with st.expander("🔍 Explanation"):
+            with st.expander("Explanation"):
                 for k, v in details.items():
                     st.write(f"**{k.replace('_', ' ').title()}**: {v}")
 
-            if prob > 0.55:
-                st.success("✅ Recommended")
-            elif prob < 0.45:
-                st.warning("❌ Avoid")
-            else:
-                st.info("🟡 No edge")
-
-# ----------- ROTOWIRE CSV TAB -----------
+# ────────────────────────────── TAB 2 — RotoWire CSV Upload ──────────────────────────────
 with tab2:
-    st.subheader("Upload RotoWire CSV")
     csv_file = st.file_uploader("Upload RotoWire-style CSV", type=["csv"])
 
     if csv_file:
@@ -78,35 +74,40 @@ with tab2:
         }
         lean_map = {"more": "over", "less": "under", "over": "over", "under": "under"}
 
-        result_rows = []
+        results = []
         for _, row in df.iterrows():
             name = row.get("Player")
             market = row.get("Market Name")
             line_val = row.get("Line")
             lean = row.get("Lean") or row.get("Prediction")
+            if pd.isna(name) or pd.isna(market) or pd.isna(line_val) or pd.isna(lean):
+                continue
 
             prop_type = prop_type_map.get(str(market).strip())
             side = lean_map.get(str(lean).strip().lower())
-
-            if not all([name, prop_type, line_val, side]):
+            if not prop_type or not side:
                 continue
 
             try:
                 line_float = float(line_val)
-                player_id = get_player_id(name, roster_mapping)
-                if not player_id:
+                pid = get_player_id(name, roster_mapping)
+                if not pid:
                     continue
-
                 game_info = get_game_info_for_player(name, roster_mapping, team_mapping, schedule_today)
                 is_home = game_info.get("home_away") == "Home"
                 ballpark = game_info.get("ballpark")
 
                 prob, details, confidence = evaluate_prop_v2(
-                    name, prop_type, line_float, side,
-                    is_home=is_home, ballpark=ballpark, player_id=player_id
+                    player_name=name,
+                    prop_type=prop_type,
+                    line=line_float,
+                    side=side,
+                    is_home=is_home,
+                    ballpark=ballpark,
+                    player_id=pid,
                 )
 
-                result_rows.append({
+                results.append({
                     "Player": name,
                     "Prop": prop_type,
                     "Line": line_float,
@@ -117,139 +118,119 @@ with tab2:
                     "Recommendation": "✅" if prob > 0.55 else "❌" if prob < 0.45 else "🟡",
                     "Ballpark": ballpark,
                     "Home/Away": "Home" if is_home else "Away",
-                    "Edge": round((3 * (prob**2)) - 1, 2)
+                    "Edge": round((3 * prob**2) - 1, 2)
                 })
 
             except Exception:
                 continue
 
-        if result_rows:
-            df_all = pd.DataFrame(result_rows).sort_values(by="Prob Val", ascending=False)
+        if results:
+            df_results = pd.DataFrame(results)
+            st.subheader("Grouped Results")
+            st.dataframe(df_results.sort_values(by="Prob Val", ascending=False))
 
-            st.subheader("🔥 Top Tier Props (Prob ≥ 65%)")
-            st.dataframe(df_all[df_all["Prob Val"] >= 65])
+            st.subheader("Top Tier Picks (Prob ≥ 65%)")
+            st.dataframe(df_results[df_results["Prob Val"] >= 65])
 
             st.subheader("✅ Recommended (55–64%)")
-            st.dataframe(df_all[(df_all["Prob Val"] >= 55) & (df_all["Prob Val"] < 65)])
-
-            st.subheader("🟡 No Edge (45–54%)")
-            st.dataframe(df_all[(df_all["Prob Val"] >= 45) & (df_all["Prob Val"] < 55)])
+            st.dataframe(df_results[(df_results["Prob Val"] >= 55) & (df_results["Prob Val"] < 65)])
 
             st.subheader("❌ Avoid (< 45%)")
-            st.dataframe(df_all[df_all["Prob Val"] < 45])
+            st.dataframe(df_results[df_results["Prob Val"] < 45])
 
-            st.subheader("💰 Value Edge (2-leg 3x Payout)")
-            df_sorted = df_all.sort_values(by="Edge", ascending=False)
-            st.dataframe(df_sorted[["Player", "Prop", "Line", "Side", "Prob %", "Edge", "Recommendation"]])
+            st.subheader("💰 Value Edge: 2-Pick (3x payout)")
+            st.dataframe(df_results.sort_values(by="Edge", ascending=False)[["Player", "Prop", "Line", "Side", "Prob %", "Edge"]])
 
-            st.subheader("🧠 Multi-Leg Optimizer (Pick6 Combos)")
-            def expected_payout(picks, multiplier):
-                prob_product = 1.0
-                for p in picks:
-                    prob = p["Prob Val"] / 100
-                    prob_product *= prob
-                return round(multiplier * prob_product - 1, 3)
+            st.subheader("🧠 Multi-Leg Optimizer")
 
-            def get_top_combos(n, payout):
-                combos = list(itertools.combinations(result_rows, n))
+            def expected_edge(picks, multiplier):
+                p = 1.0
+                for pick in picks:
+                    p *= pick["Prob Val"] / 100
+                return round((multiplier * p) - 1, 3)
+
+            def get_best_combos(n, payout):
+                combos = list(itertools.combinations(results, n))
                 ranked = []
-                for c in combos:
+                for combo in combos:
                     ranked.append({
-                        "Players": ", ".join(p["Player"] for p in c),
-                        "Props": " | ".join(f"{p['Prop']} {p['Side']} {p['Line']}" for p in c),
-                        "Probabilities": " x ".join(p["Prob %"] for p in c),
-                        "Expected Edge": expected_payout(c, payout)
+                        "Players": ", ".join([p["Player"] for p in combo]),
+                        "Props": " | ".join([f"{p['Prop']} {p['Side']} {p['Line']}" for p in combo]),
+                        "Edge": expected_edge(combo, payout)
                     })
-                return sorted(ranked, key=lambda x: x["Expected Edge"], reverse=True)[:5]
+                return sorted(ranked, key=lambda x: x["Edge"], reverse=True)[:5]
 
-            st.markdown("#### 🔢 Best 2-Leg Combos (3x payout)")
-            st.dataframe(get_top_combos(2, payout=3))
+            st.markdown("Top 2-Leg Combos (3x)")
+            st.dataframe(get_best_combos(2, payout=3))
 
-            st.markdown("#### 🔢 Best 3-Leg Combos (5x payout)")
-            st.dataframe(get_top_combos(3, payout=5))
+            st.markdown("Top 3-Leg Combos (5x)")
+            st.dataframe(get_best_combos(3, payout=5))
 
-            st.markdown("#### 🔢 Best 5-Leg Combos (10x payout)")
-            st.dataframe(get_top_combos(5, payout=10))
+            st.markdown("Top 5-Leg Combos (10x)")
+            st.dataframe(get_best_combos(5, payout=10))
 
-# ----------- LIVE PICK6 TAB -----------
+# ────────────────────────────── TAB 3 — Live Pick6 Props ──────────────────────────────
 with tab3:
-    st.markdown("## 🎯 Live Pick6 Slate (Beta)")
-    st.caption("Fetches props from The Odds API (free plan, beta support).")
-
-    if st.button("📡 Fetch Live Pick6 Props"):
+    if st.button("Fetch Live Props from Odds API"):
         try:
-            import requests
+            odds_key = "831866f1ee85b3cd5265ff2572ddecc6"
             response = requests.get(
                 "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds",
                 params={
-                    "apiKey": "831866f1ee85b3cd5265ff2572ddecc6",
+                    "apiKey": odds_key,
                     "regions": "us",
                     "markets": "player_props",
-                    "oddsFormat": "american"
+                    "oddsFormat": "american",
                 },
-                timeout=10
+                timeout=10,
             )
             games = response.json()
-            live_props = []
+            evaluated = []
 
             for game in games:
-                for bookmaker in game.get("bookmakers", []):
-                    for market in bookmaker.get("markets", []):
+                for book in game.get("bookmakers", []):
+                    for market in book.get("markets", []):
                         for outcome in market.get("outcomes", []):
-                            name = outcome.get("name")
+                            name = outcome.get("name", "")
                             line = outcome.get("point")
                             if not name or line is None:
                                 continue
                             tokens = name.split()
-                            if tokens[-1].lower() in {"over", "under"}:
-                                side = tokens[-1].lower()
-                                player_name = " ".join(tokens[:-1])
-                            else:
-                                player_name = name
-                                side = "over"
-                            live_props.append({
-                                "player_name": player_name,
-                                "prop_type": market["key"],
-                                "line": line,
-                                "side": side,
+                            side = tokens[-1].lower() if tokens[-1].lower() in {"over", "under"} else "over"
+                            player_name = " ".join(tokens[:-1]) if side in tokens[-1].lower() else name
+                            prop_type = market["key"]
+
+                            pid = get_player_id(player_name, roster_mapping)
+                            if not pid:
+                                continue
+                            game_info = get_game_info_for_player(player_name, roster_mapping, team_mapping, schedule_today)
+                            is_home = game_info.get("home_away") == "Home"
+                            ballpark = game_info.get("ballpark")
+
+                            prob, details, confidence = evaluate_prop_v2(
+                                player_name=player_name,
+                                prop_type=prop_type,
+                                line=line,
+                                side=side,
+                                is_home=is_home,
+                                ballpark=ballpark,
+                                player_id=pid,
+                            )
+
+                            evaluated.append({
+                                "Player": player_name,
+                                "Prop": prop_type,
+                                "Side": side.title(),
+                                "Line": line,
+                                "Prob %": f"{prob * 100:.1f}%",
+                                "Edge": round((3 * prob**2) - 1, 2),
                             })
 
-            evaluated = []
-            for p in live_props:
-                pid = get_player_id(p["player_name"], roster_mapping)
-                if not pid:
-                    continue
-                game_info = get_game_info_for_player(p["player_name"], roster_mapping, team_mapping, schedule_today)
-                is_home = game_info.get("home_away") == "Home"
-                ballpark = game_info.get("ballpark")
-
-                try:
-                    prob, details, confidence = evaluate_prop_v2(
-                        player_name=p["player_name"],
-                        prop_type=p["prop_type"],
-                        line=p["line"],
-                        side=p["side"],
-                        is_home=is_home,
-                        ballpark=ballpark,
-                        player_id=pid
-                    )
-                except Exception:
-                    continue
-
-                evaluated.append({
-                    "Player": p["player_name"],
-                    "Prop": p["prop_type"],
-                    "Line": p["line"],
-                    "Side": p["side"].title(),
-                    "Prob %": f"{prob * 100:.1f}%",
-                    "Edge": round((3 * (prob**2)) - 1, 2)
-                })
-
             if evaluated:
-                st.success(f"Evaluated {len(evaluated)} live props.")
+                st.success("Live props evaluated")
                 st.dataframe(pd.DataFrame(evaluated).sort_values(by="Edge", ascending=False))
             else:
-                st.warning("No valid props could be evaluated.")
+                st.warning("No valid live props were returned.")
 
         except Exception as e:
-            st.error(f"Error fetching props: {e}")
+            st.error(f"Error fetching or evaluating live props: {e}")
