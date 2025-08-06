@@ -20,12 +20,20 @@ def get_player_id(player_name: str, roster_mapping: dict) -> int | None:
         pass
     return None
 
+
 def build_roster_mapping() -> dict:
-    """Return a mapping from lowercase player name to MLBAM ID using pybaseball team rosters."""
-    from pybaseball import team_ids, team_roster
+    """Builds player name → MLBAM ID mapping using all 30 team rosters."""
+    from pybaseball import team_roster
     mapping = {}
 
-    for team_id in team_ids():
+    # Hardcoded MLB team IDs (30 teams)
+    team_ids = [
+        108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
+        118, 119, 120, 121, 133, 134, 135, 136, 137, 138,
+        139, 140, 141, 142, 143, 144, 145, 146, 147, 158
+    ]
+
+    for team_id in team_ids:
         try:
             df = team_roster(team_id)
             for _, row in df.iterrows():
