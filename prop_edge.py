@@ -22,11 +22,11 @@ def get_player_id(player_name: str, roster_mapping: dict) -> int | None:
 
 
 def build_roster_mapping() -> dict:
-    """Builds player name → MLBAM ID mapping using all 30 team rosters."""
+    """Builds player name to MLBAM ID mapping using all 30 team rosters."""
     from pybaseball import team_roster
     mapping = {}
 
-    # Hardcoded MLB team IDs (30 teams)
+    # Static MLB team IDs
     team_ids = [
         108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
         118, 119, 120, 121, 133, 134, 135, 136, 137, 138,
