@@ -1,44 +1,49 @@
 # prop_edge.py
 
-from pybaseball import playerid_lookup
+import requests
 
 def get_player_id(player_name, roster_mapping):
-    """Return MLBAM player ID for a given name using roster or lookup fallback."""
+    """Return MLBAM player ID for a given name using roster or fallback."""
     key = player_name.strip().lower()
     if key in roster_mapping:
         return roster_mapping[key]
 
     try:
-        name_parts = key.split()
-        if len(name_parts) == 2:
-            last, first = name_parts[1], name_parts[0]
-            df = playerid_lookup(last, first)
-            if not df.empty:
-                return int(df["key_mlbam"].iloc[0])
+        # Fallback: basic name match via MLB API (slower, less reliable)
+        url = "https://statsapi.mlb.com/api/v1/people/search"
+        response = requests.get(url, params={"names": player_name})
+        data = response.json()
+        people = data.get("people", [])
+        if people:
+            return people[0].get("id")
     except Exception:
         pass
+
     return None
 
 
 def build_roster_mapping():
-    """Builds player name to MLBAM ID mapping using all 30 team rosters."""
-    from pybaseball import team_roster
+    """Fetch player name to MLBAM ID mapping using MLB API (no pybaseball)."""
     mapping = {}
+    try:
+        teams_resp = requests.get("https://statsapi.mlb.com/api/v1/teams", params={"sportId": 1}, timeout=10)
+        teams = teams_resp.json().get("teams", [])
+    except Exception:
+        teams = []
 
-    team_ids = [
-        108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
-        118, 119, 120, 121, 133, 134, 135, 136, 137, 138,
-        139, 140, 141, 142, 143, 144, 145, 146, 147, 158
-    ]
-
-    for team_id in team_ids:
+    for team in teams:
+        team_id = team.get("id")
         try:
-            df = team_roster(team_id)
-            for _, row in df.iterrows():
-                name = row.get("name_display_first_last", "").lower()
-                pid = row.get("player_id")
-                if name and pid:
-                    mapping[name] = int(pid)
+            roster_resp = requests.get(
+                f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster",
+                params={"rosterType": "active"},
+                timeout=10,
+            )
+            for player in roster_resp.json().get("roster", []):
+                pid = player.get("person", {}).get("id")
+                name = player.get("person", {}).get("fullName", "").lower()
+                if pid and name:
+                    mapping[name] = pid
         except Exception:
             continue
 
